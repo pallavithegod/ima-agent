@@ -98,12 +98,39 @@ export type Health = {
   memory_mode: string;
 };
 
+export type ProviderHealthResource = {
+  provider: "vercel" | "render";
+  resourceId?: string;
+  resourceName?: string;
+  ownerId?: string | null;
+  repository?: string | null;
+  repositoryImported?: boolean;
+  tracked?: boolean;
+  accessible: boolean;
+  error?: string;
+  latestDeployment?: {
+    id: string;
+    status: string;
+    commitSha?: string | null;
+    message?: string | null;
+    createdAt?: string | null;
+    url?: string | null;
+  } | null;
+};
+
 export type IntegrationStatus = {
   connections: { provider: string; account_name: string; updated_at?: string; metadata?: Record<string, unknown> }[];
   projects: {
     id: number;
     vercel_project_id: string;
     vercel_project_name: string;
+    github_repository: string;
+  }[];
+  renderServices: {
+    id: number;
+    render_service_id: string;
+    render_service_name: string;
+    render_owner_id?: string | null;
     github_repository: string;
   }[];
   repositories: {

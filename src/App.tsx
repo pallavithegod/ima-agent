@@ -32,6 +32,8 @@ import {
   Wrench,
   X,
   UserRound,
+  Home,
+  HeartPulse,
 } from "lucide-react";
 import {
   Bar,
@@ -54,6 +56,7 @@ import type {
   Health,
   Incident,
   IntegrationStatus,
+  ProviderHealthResource,
   RepositoryActivity,
   User,
 } from "./types";
@@ -61,6 +64,7 @@ import type {
 const COLORS = ["#6ce5b1", "#80a7ff", "#f4c768", "#ff7d8f", "#a98bff"];
 
 function App() {
+  const knownPath = window.location.pathname === "/" || window.location.pathname === "";
   const [session, setSession] = useState<{ token: string; user: User } | null>(() => {
     const stored = localStorage.getItem("recallops-session");
     return stored ? JSON.parse(stored) : null;
@@ -69,6 +73,8 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     return params.get("status") === "error" ? params.get("error") : null;
   }, []);
+
+  if (!knownPath) return <NotFoundPage />;
 
   if (!session) {
     return <AuthScreen onAuthenticated={setSession} />;
@@ -163,15 +169,17 @@ function Dashboard({
   onLogout: () => void;
 }) {
   const client = useMemo(() => api(session.token), [session.token]);
-  const [page, setPage] = useState<"overview" | "repositories" | "deployments" | "incidents" | "handoff" | "connections" | "account">("overview");
+  const [page, setPage] = useState<"overview" | "repositories" | "health" | "deployments" | "incidents" | "handoff" | "connections" | "account">("overview");
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [health, setHealth] = useState<Health | null>(null);
   const [selected, setSelected] = useState<Incident | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationStatus | null>(null);
+  const [providerHealth, setProviderHealth] = useState<ProviderHealthResource[]>([]);
   const [mobileNav, setMobileNav] = useState(false);
   const [error, setError] = useState(initialError || "");
+  const [notice, setNotice] = useState("");
   const [onboardingSkipped, setOnboardingSkipped] = useState(
     localStorage.getItem("recallops-onboarding-skipped") === "true",
   );
@@ -180,10 +188,12 @@ function Dashboard({
   );
 
   useEffect(() => {
-    if (initialError) {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("integration") || params.has("status") || params.has("error")) {
+      if (params.get("status") === "connected") setNotice("Deployment provider connected");
       window.history.replaceState({}, document.title, window.location.pathname);
     }
-  }, [initialError]);
+  }, []);
 
   const refresh = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -192,13 +202,15 @@ function Dashboard({
       client.deployments(),
       client.health(),
       client.integrationStatus(),
+      client.providerHealth(),
     ] as const);
-    const [analyticsResult, incidentsResult, deploymentsResult, healthResult, integrationResult] = results;
+    const [analyticsResult, incidentsResult, deploymentsResult, healthResult, integrationResult, providerHealthResult] = results;
     if (analyticsResult.status === "fulfilled") setAnalytics(analyticsResult.value);
     if (incidentsResult.status === "fulfilled") setIncidents(incidentsResult.value);
     if (deploymentsResult.status === "fulfilled") setDeployments(deploymentsResult.value);
     if (healthResult.status === "fulfilled") setHealth(healthResult.value);
     if (integrationResult.status === "fulfilled") setIntegrations(integrationResult.value);
+    if (providerHealthResult.status === "fulfilled") setProviderHealth(providerHealthResult.value.resources);
     const failures = results.filter((result) => result.status === "rejected");
     if (failures.length === results.length) {
       const reason = failures[0].reason;
@@ -221,14 +233,35 @@ function Dashboard({
         <nav>
           <NavButton active={page === "overview"} icon={<LayoutDashboard />} label="Overview" onClick={() => setPage("overview")} />
           <NavButton active={page === "repositories"} icon={<FolderGit2 />} label="Repositories" onClick={() => setPage("repositories")} />
-          <NavButton active={page === "deployments"} icon={<GitCommit />} label="Vercel failures" onClick={() => setPage("deployments")} />
+          <NavButton active={page === "health"} icon={<HeartPulse />} label="Health" onClick={() => setPage("health")} />
+          <NavButton active={page === "deployments"} icon={<GitCommit />} label="Deployment failures" onClick={() => setPage("deployments")} />
           <NavButton active={page === "incidents"} icon={<AlertTriangle />} label="Incidents" count={analytics?.totals.open} onClick={() => setPage("incidents")} />
           <NavButton active={page === "handoff"} icon={<FileText />} label="On-call brief" onClick={() => setPage("handoff")} />
           <NavButton active={page === "connections"} icon={<Settings />} label="Connections" onClick={() => setPage("connections")} />
           <NavButton active={page === "account"} icon={<UserRound />} label="Account" onClick={() => setPage("account")} />
         </nav>
         <div className="sidebar-foot">
-          <div className="agent-state"><span className={integrations?.monitorActive && health?.llm_mode === "deepseek" ? "active" : ""} /><div><strong>{health?.llm_mode !== "deepseek" ? "DeepSeek key required" : integrations?.monitorActive ? "Monitor active" : "Agent ready"}</strong><small>{integrations?.repositories.length ? `${integrations.repositories.length} repositories imported` : "No repositories imported"}</small></div></div>
+          <div className="agent-state">
+            <span className={integrations?.monitorActive && health?.llm_mode === "deepseek" ? "active" : ""} />
+            <div>
+              <strong>
+                {!health
+                  ? "Checking agent"
+                  : health.llm_mode !== "deepseek"
+                    ? "DeepSeek key required"
+                    : integrations?.monitorActive
+                      ? "Monitor active"
+                      : "Agent ready"}
+              </strong>
+              <small>
+                {!integrations
+                  ? "Loading repositories"
+                  : integrations.repositories.length
+                    ? `${integrations.repositories.length} repositories imported`
+                    : "No repositories imported for this account"}
+              </small>
+            </div>
+          </div>
           <button className="sidebar-profile" onClick={() => setPage("account")}><span>{session.user.name.slice(0, 2).toUpperCase()}</span><div><strong>{session.user.name}</strong><small>{session.user.email}</small></div></button>
           <button onClick={onLogout}><LogOut size={17} /> Sign out</button>
         </div>
@@ -239,11 +272,12 @@ function Dashboard({
           <button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)}><Menu /></button>
           <div>
             <p className="eyebrow">OPERATIONS WORKSPACE</p>
-            <h2>{page === "overview" ? "Incident intelligence" : page === "repositories" ? "Monitored repositories" : page === "deployments" ? "Deployment failures" : page === "incidents" ? "Incident memory" : page === "connections" ? "Connected accounts" : page === "account" ? "Account profile" : "On-call handoff"}</h2>
+            <h2>{page === "overview" ? "Incident intelligence" : page === "repositories" ? "Monitored repositories" : page === "health" ? "Deployment health" : page === "deployments" ? "Deployment failures" : page === "incidents" ? "Incident memory" : page === "connections" ? "Connected accounts" : page === "account" ? "Account profile" : "On-call handoff"}</h2>
           </div>
         </header>
 
-        {error && <div className="error-banner">{error}</div>}
+        {error && <Toast message={error} tone="error" onClose={() => setError("")} />}
+        {notice && <Toast message={notice} tone="success" onClose={() => setNotice("")} />}
         {page === "overview" && (
           <Overview
             analytics={analytics}
@@ -256,13 +290,25 @@ function Dashboard({
         {page === "repositories" && (
           <RepositoryPage client={client} status={integrations} onChanged={refresh} />
         )}
+        {page === "health" && (
+          <ProviderHealthPage
+            client={client}
+            resources={providerHealth}
+            incidents={incidents}
+            onChanged={refresh}
+            onImportRepository={() => setPage("repositories")}
+          />
+        )}
         {page === "deployments" && (
           <DeploymentPage
             deployments={deployments}
             configured={Boolean(integrations?.projects.length)}
             importedCount={integrations?.repositories.length || 0}
             onSync={async () => {
-              await client.syncVercel();
+              const syncs = [];
+              if (integrations?.projects.length) syncs.push(client.syncVercel());
+              if (integrations?.renderServices.length) syncs.push(client.syncRender());
+              await Promise.allSettled(syncs);
               await refresh();
             }}
           />
@@ -329,6 +375,41 @@ function NavButton({
     <button className={active ? "active" : ""} onClick={onClick}>
       {icon}<span>{label}</span>{count ? <b>{count}</b> : null}
     </button>
+  );
+}
+
+function Toast({
+  message,
+  tone,
+  onClose,
+}: {
+  message: string;
+  tone: "error" | "success";
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const timer = window.setTimeout(onClose, 5_000);
+    return () => window.clearTimeout(timer);
+  }, [onClose]);
+  return (
+    <div className={`toast ${tone}`} role="status">
+      {tone === "error" ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}
+      <span>{message}</span>
+      <button title="Dismiss notification" onClick={onClose}><X size={15} /></button>
+      <i />
+    </div>
+  );
+}
+
+function NotFoundPage() {
+  return (
+    <main className="not-found">
+      <div className="not-found-code">404</div>
+      <p className="eyebrow">PAGE NOT FOUND</p>
+      <h1>This route does not exist.</h1>
+      <p>The operations workspace is still right where you left it.</p>
+      <a href="/"><Home size={17} /> Return to RecallOps</a>
+    </main>
   );
 }
 
@@ -501,7 +582,7 @@ function RepositoryPage({
   });
 
   if (!githubConnected) {
-    return <div className="page-content"><div className="error-banner inline">Sign in with GitHub again to load repositories.</div></div>;
+    return <div className="page-content"><div className="setup-notice"><Github size={18} /><div><strong>GitHub connection required</strong><p>Sign in with GitHub again to load repositories.</p></div></div></div>;
   }
 
   return (
@@ -514,7 +595,7 @@ function RepositoryPage({
         <label className="owner-select"><Github size={18} /><select value={owner} onChange={(event) => setOwner(event.target.value)}><option value="all">All GitHub owners</option>{owners.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
         <div className="search-box repository-search"><Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search repositories..." /></div>
       </div>
-      {error && <div className="error-banner inline">{error}</div>}
+      {error && <Toast message={error} tone="error" onClose={() => setError("")} />}
       <section className="repository-list">
         {loading ? <LoadingState /> : visible.map((repository) => (
           <article className="repository-row" key={repository.id}>
@@ -717,11 +798,14 @@ function Connections({
   const [repository, setRepository] = useState("");
   const [projectId, setProjectId] = useState("");
   const [renderKey, setRenderKey] = useState("");
+  const [showRenderKeyForm, setShowRenderKeyForm] = useState(false);
+  const [renderMessage, setRenderMessage] = useState("");
   const [vercelToken, setVercelToken] = useState("");
   const [showVercelTokenForm, setShowVercelTokenForm] = useState(false);
   const [updatingVercelToken, setUpdatingVercelToken] = useState(false);
   const [vercelTokenMessage, setVercelTokenMessage] = useState("");
   const [teamAccessLimited, setTeamAccessLimited] = useState(false);
+  const [guideProvider, setGuideProvider] = useState<"vercel" | "render" | null>(null);
   const [error, setError] = useState("");
   const connected = (provider: string) => status?.connections.some((item) => item.provider === provider);
 
@@ -761,6 +845,7 @@ function Connections({
             name="Vercel"
             detail={connected("vercel") ? "Deployment projects and build logs" : "Connect deployment projects"}
             connected={Boolean(connected("vercel"))}
+            onGuide={() => setGuideProvider("vercel")}
             onConnect={async () => {
               const authorization = await client.startVercel();
               window.location.assign(authorization.url);
@@ -807,25 +892,37 @@ function Connections({
             name="Render"
             detail={connected("render") ? "Render API account connected" : "API key connection"}
             connected={Boolean(connected("render"))}
+            onGuide={() => setGuideProvider("render")}
             onDisconnect={async () => {
               await client.disconnectProvider("render");
               await onChanged();
             }}
           >
-            {!connected("render") && (
+            {connected("render") && (
+              <button className="inline-token-action" onClick={() => {
+                setShowRenderKeyForm((current) => !current);
+                setRenderMessage("");
+              }}>
+                <RefreshCw size={13} /> {showRenderKeyForm ? "Cancel API key update" : "Update API key"}
+              </button>
+            )}
+            {(!connected("render") || showRenderKeyForm) && (
               <div className="render-connect-form">
                 <input type="password" value={renderKey} onChange={(event) => setRenderKey(event.target.value)} placeholder="Render API key" />
                 <button disabled={renderKey.length < 20} onClick={async () => {
                   try {
-                    await client.connectRender(renderKey);
+                    const result = await client.connectRender(renderKey);
                     setRenderKey("");
+                    setShowRenderKeyForm(false);
+                    setRenderMessage(`${result.services} services found and ${result.matches} repositories matched.`);
                     await onChanged();
                   } catch (requestError) {
                     setError(requestError instanceof Error ? requestError.message : "Render connection failed");
                   }
-                }}>Connect</button>
+                }}>{connected("render") ? "Update" : "Connect"}</button>
               </div>
             )}
+            {renderMessage && <p className="token-success">{renderMessage}</p>}
           </ConnectionRow>
         </div>
       </section>
@@ -857,7 +954,28 @@ function Connections({
           </div>
         </article>
       )}
-      {error && <div className="error-banner">{error}</div>}
+      {connected("github") && connected("render") && (
+        <article className="panel mapping-panel">
+          <div className="panel-heading"><div><p className="eyebrow">RENDER TRACKING</p><h3>Matched Render services</h3></div></div>
+          {status?.renderServices.length ? (
+            <div className="trend-list">
+              {status.renderServices.map((service) => (
+                <div className="trend-item" key={service.id}>
+                  <span>LIVE</span>
+                  <div><strong>{service.render_service_name}</strong><p>{service.github_repository}</p></div>
+                </div>
+              ))}
+            </div>
+          ) : <p className="muted">No Render service repository matched an imported GitHub repository yet.</p>}
+        </article>
+      )}
+      {guideProvider && (
+        <ProviderCredentialGuide
+          provider={guideProvider}
+          onClose={() => setGuideProvider(null)}
+        />
+      )}
+      {error && <Toast message={error} tone="error" onClose={() => setError("")} />}
     </div>
   );
 }
@@ -870,6 +988,7 @@ function ConnectionRow({
   locked = false,
   onConnect,
   onDisconnect,
+  onGuide,
   children,
 }: {
   icon: React.ReactNode;
@@ -879,6 +998,7 @@ function ConnectionRow({
   locked?: boolean;
   onConnect?: () => Promise<void>;
   onDisconnect?: () => Promise<void>;
+  onGuide?: () => void;
   children?: React.ReactNode;
 }) {
   return (
@@ -886,10 +1006,57 @@ function ConnectionRow({
       <span className="connection-icon">{icon}</span>
       <div><strong>{name}</strong><p>{detail}</p>{children}</div>
       <span className={`connection-status ${connected ? "connected" : ""}`}>{connected ? "Connected" : "Not connected"}</span>
-      {!locked && (connected
-        ? <button className="icon-action" title={`Disconnect ${name}`} onClick={() => void onDisconnect?.()}>-</button>
-        : onConnect && <button className="icon-action add" title={`Connect ${name}`} onClick={() => void onConnect()}>+</button>)}
+      <div className="connection-actions">
+        {onGuide && <button className="guide-action" title={`${name} setup guide`} onClick={onGuide}>Guide</button>}
+        {!locked && (connected
+          ? <button className="icon-action" title={`Disconnect ${name}`} onClick={() => void onDisconnect?.()}>-</button>
+          : onConnect && <button className="icon-action add" title={`Connect ${name}`} onClick={() => void onConnect()}>+</button>)}
+      </div>
     </article>
+  );
+}
+
+function ProviderCredentialGuide({
+  provider,
+  onClose,
+}: {
+  provider: "vercel" | "render";
+  onClose: () => void;
+}) {
+  const isVercel = provider === "vercel";
+  const settingsUrl = isVercel
+    ? "https://vercel.com/account/settings/tokens"
+    : "https://dashboard.render.com/u/settings#api-keys";
+  const docsUrl = isVercel
+    ? "https://vercel.com/docs/rest-api"
+    : "https://render.com/docs/api";
+  return (
+    <div className="modal-backdrop provider-backdrop" onMouseDown={onClose}>
+      <section className="credential-guide" onMouseDown={(event) => event.stopPropagation()}>
+        <button className="close-button" title="Close guide" onClick={onClose}><X size={18} /></button>
+        <div className="access-guide-heading">
+          <span>{isVercel ? <Rocket /> : <Server />}</span>
+          <div>
+            <p className="eyebrow">CREDENTIAL GUIDE</p>
+            <h2>Get a {isVercel ? "Vercel access token" : "Render API key"}</h2>
+            <p>
+              Use the account that owns, or has access to, the deployment projects you want RecallOps to monitor.
+            </p>
+          </div>
+        </div>
+        <ol className="access-steps">
+          <li><span>1</span><div><strong>Open {isVercel ? "token settings" : "Account Settings"}</strong><p>Sign in to the correct {isVercel ? "Vercel account or team member account" : "Render account and workspace"}.</p></div></li>
+          <li><span>2</span><div><strong>Create a new {isVercel ? "access token" : "API key"}</strong><p>Name it RecallOps. Choose an expiration you can rotate safely. Render displays the full key only once.</p></div></li>
+          <li><span>3</span><div><strong>Paste it on Connections</strong><p>RecallOps verifies it, encrypts it with authenticated encryption, and never displays the saved credential.</p></div></li>
+          <li><span>4</span><div><strong>Confirm project access</strong><p>{isVercel ? "The token owner must belong to the team that owns the deployment. Personal tokens cannot reveal teams the user cannot access." : "The key must belong to an account with access to the services, deploys, and logs you want monitored."}</p></div></li>
+        </ol>
+        <div className="credential-guide-links">
+          <a href={settingsUrl} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Open {isVercel ? "Vercel token settings" : "Render API key settings"}</a>
+          <a href={docsUrl} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Read official API guide</a>
+        </div>
+        <div className="credential-safety"><ShieldCheck size={15} /><span>Never commit tokens to Git, send them in screenshots, or share them between users.</span></div>
+      </section>
+    </div>
   );
 }
 
@@ -1010,6 +1177,122 @@ function AccountPage({ user, status }: { user: User; status: IntegrationStatus |
   );
 }
 
+function ProviderHealthPage({
+  client,
+  resources,
+  incidents,
+  onChanged,
+  onImportRepository,
+}: {
+  client: ReturnType<typeof api>;
+  resources: ProviderHealthResource[];
+  incidents: Incident[];
+  onChanged: () => Promise<void>;
+  onImportRepository: () => void;
+}) {
+  const [working, setWorking] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const failedStatuses = new Set([
+    "ERROR",
+    "CANCELED",
+    "FAILED",
+    "BUILD_FAILED",
+    "UPDATE_FAILED",
+    "DEACTIVATED",
+  ]);
+  const rows = resources.filter((resource) => resource.resourceId);
+  const failed = rows.filter((resource) =>
+    failedStatuses.has(resource.latestDeployment?.status?.toUpperCase() || ""),
+  );
+  const healthy = rows.filter((resource) => {
+    const status = resource.latestDeployment?.status?.toUpperCase() || "";
+    return status && !failedStatuses.has(status);
+  });
+
+  async function run(resource: ProviderHealthResource) {
+    const key = `${resource.provider}:${resource.resourceId}`;
+    setWorking(key);
+    setError("");
+    setNotice("");
+    try {
+      if (!resource.tracked) {
+        const result = await client.trackProviderResource(resource);
+        setNotice(result.inspectionError
+          ? `${resource.resourceName} is monitored. Inspection will retry automatically.`
+          : `${resource.resourceName} is monitored. Failure inspection completed.`);
+      } else {
+        await client.inspectProvider(resource.provider);
+        setNotice(`${resource.resourceName} was inspected. Any failed deployment was sent for remediation.`);
+      }
+      await onChanged();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Deployment inspection failed");
+    } finally {
+      setWorking("");
+    }
+  }
+
+  return (
+    <div className="page-content health-page">
+      <section className="health-summary">
+        <div><p className="eyebrow">LIVE PROVIDER STATUS</p><h3>Deployment health</h3><p>Vercel and Render resources are checked against their latest deployment. Failed tracked deployments enter the DeepSeek remediation and draft-PR workflow.</p></div>
+        <div className="health-counts">
+          <span><strong>{rows.length}</strong> projects</span>
+          <span className="healthy"><strong>{healthy.length}</strong> healthy</span>
+          <span className="failed"><strong>{failed.length}</strong> failed</span>
+        </div>
+      </section>
+      <section className="provider-health-list">
+        {rows.map((resource) => {
+          const deployment = resource.latestDeployment;
+          const isFailed = failedStatuses.has(deployment?.status?.toUpperCase() || "");
+          const incident = incidents.find((item) => item.deployment_id === deployment?.id);
+          const key = `${resource.provider}:${resource.resourceId}`;
+          const actionLabel = !resource.repository
+            ? "Repository unavailable"
+            : !resource.repositoryImported
+              ? "Import repository"
+              : !resource.tracked
+                ? "Monitor and fix"
+                : isFailed && !incident?.pull_request_url
+                  ? "Fix now"
+                  : "Inspect now";
+          return (
+            <article className="provider-health-row" key={key}>
+              <span className={`health-provider ${resource.provider}`}>{resource.provider === "vercel" ? <Rocket /> : <Server />}</span>
+              <div className="health-resource">
+                <div><strong>{resource.resourceName}</strong><span>{resource.provider}</span></div>
+                <p>{resource.repository || "No GitHub repository metadata exposed"}</p>
+                {deployment && <small>{deployment.commitSha?.slice(0, 9) || "No commit"} · {deployment.createdAt ? formatRelative(deployment.createdAt) : "Unknown deployment time"}</small>}
+              </div>
+              <div className="health-deployment-state">
+                <span className={isFailed ? "failed" : deployment ? "healthy" : "unknown"}>{deployment?.status || "No deployment"}</span>
+                <small>{incident?.pull_request_url ? "Draft PR created" : incident?.fix_summary ? "Fix generated" : isFailed ? "Needs remediation" : resource.tracked ? "Monitoring" : "Not tracked"}</small>
+              </div>
+              {incident?.pull_request_url ? (
+                <a className="health-pr-link" href={incident.pull_request_url} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open PR</a>
+              ) : (
+                <button
+                  className="health-action"
+                  disabled={!resource.repository || working === key}
+                  onClick={resource.repositoryImported ? () => void run(resource) : onImportRepository}
+                >
+                  {working === key ? <RefreshCw className="spin" size={14} /> : isFailed ? <Wrench size={14} /> : <Activity size={14} />}
+                  {working === key ? "Inspecting..." : actionLabel}
+                </button>
+              )}
+            </article>
+          );
+        })}
+        {!rows.length && <Empty label="Connect Vercel or Render to load deployment health" />}
+      </section>
+      {notice && <Toast message={notice} tone="success" onClose={() => setNotice("")} />}
+      {error && <Toast message={error} tone="error" onClose={() => setError("")} />}
+    </div>
+  );
+}
+
 function DeploymentPage({
   deployments,
   configured,
@@ -1027,7 +1310,7 @@ function DeploymentPage({
     <div className="page-content">
       <section className="handoff-hero">
         <div>
-          <p className="eyebrow">LIVE VERCEL PROJECT</p>
+          <p className="eyebrow">LIVE DEPLOYMENT PROVIDERS</p>
           <h3>Commit-aware deployment remediation</h3>
           <p>
             Fetch failed production deployments, read the triggering commit through GitHub MCP,
@@ -1043,22 +1326,22 @@ function DeploymentPage({
             try {
               await onSync();
             } catch (requestError) {
-              setError(requestError instanceof Error ? requestError.message : "Vercel sync failed");
+              setError(requestError instanceof Error ? requestError.message : "Deployment sync failed");
             } finally {
               setSyncing(false);
             }
           }}
         >
-          <RefreshCw size={17} /> {syncing ? "Inspecting failures..." : "Sync failed deployments"}
+          <RefreshCw size={17} /> {syncing ? "Inspecting failures..." : "Sync deployment providers"}
         </button>
       </section>
       {!configured && (
         <div className="setup-notice">
           <Rocket size={18} />
-          <div><strong>{importedCount ? "Repositories imported, deployment provider mapping pending" : "Import a repository to begin"}</strong><p>{importedCount ? "Connect Vercel and map a project from Connected Accounts to fetch deployment logs and failures." : "Choose a GitHub repository first. RecallOps will automatically link a matching Vercel project when access is available."}</p></div>
+          <div><strong>{importedCount ? "Repositories imported, deployment provider mapping pending" : "Import a repository to begin"}</strong><p>{importedCount ? "Connect Vercel or Render from Connected Accounts to fetch deployment logs and failures." : "Choose a GitHub repository first. RecallOps links matching deployment services when access is available."}</p></div>
         </div>
       )}
-      {error && <div className="error-banner">{error}</div>}
+      {error && <Toast message={error} tone="error" onClose={() => setError("")} />}
       <article className="panel incident-list-panel deployment-list">
         {deployments.length ? deployments.map((deployment) => (
           <div className="deployment-record" key={deployment.id}>
@@ -1074,7 +1357,7 @@ function DeploymentPage({
           </div>
           {deployment.raw_payload.logs && <details className="deployment-logs"><summary>View captured build logs</summary><pre>{deployment.raw_payload.logs}</pre></details>}
           </div>
-        )) : <Empty label="No Vercel failures have been synchronized" />}
+        )) : <Empty label="No deployment failures have been synchronized" />}
       </article>
     </div>
   );

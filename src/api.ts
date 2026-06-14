@@ -5,6 +5,7 @@ import type {
   Health,
   Incident,
   IntegrationStatus,
+  ProviderHealthResource,
   RepositoryActivity,
   User,
 } from "./types";
@@ -81,7 +82,34 @@ export function api(token: string) {
     deployments: () => request<Deployment[]>("/api/deployments"),
     syncVercel: () =>
       request<Record<string, unknown>>("/api/integrations/vercel/sync", { method: "POST" }),
+    syncRender: () =>
+      request<Record<string, unknown>>("/api/integrations/render/sync", { method: "POST" }),
     integrationStatus: () => authRequest<IntegrationStatus>("/api/integrations/status"),
+    providerHealth: () => authRequest<{ resources: ProviderHealthResource[] }>(
+      "/api/integrations/provider-health",
+    ),
+    inspectProvider: (provider: "vercel" | "render") =>
+      authRequest<Record<string, unknown>>(`/api/integrations/provider-health/${provider}/inspect`, {
+        method: "POST",
+      }),
+    trackProviderResource: (resource: ProviderHealthResource) =>
+      authRequest<{
+        tracked: boolean;
+        inspection: Record<string, unknown> | null;
+        inspectionError?: string | null;
+      }>(
+        "/api/integrations/provider-health/track",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            provider: resource.provider,
+            resourceId: resource.resourceId,
+            resourceName: resource.resourceName,
+            ownerId: resource.ownerId || null,
+            repository: resource.repository,
+          }),
+        },
+      ),
     startVercel: () => authRequest<{ url: string }>("/api/integrations/vercel/start"),
     connectVercelToken: (accessToken: string) => authRequest<{
       connected: boolean;
@@ -119,7 +147,12 @@ export function api(token: string) {
       matches: { repository: string; project: { id: string; name: string } }[];
       teamAccessLimited: boolean;
     }>("/api/integrations/repositories/rematch", { method: "POST" }),
-    connectRender: (apiKey: string) => authRequest<{ connected: boolean; accountName: string }>(
+    connectRender: (apiKey: string) => authRequest<{
+      connected: boolean;
+      accountName: string;
+      services: number;
+      matches: number;
+    }>(
       "/api/integrations/render/connect",
       { method: "POST", body: JSON.stringify({ apiKey }) },
     ),
