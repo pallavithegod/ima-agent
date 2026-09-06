@@ -11,7 +11,9 @@ import type {
 } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
-const AUTH_URL = import.meta.env.VITE_AUTH_URL || "http://localhost:4000";
+// Auth now lives on the unified Python backend; VITE_AUTH_URL remains only as
+// an override for split deployments.
+const AUTH_URL = import.meta.env.VITE_AUTH_URL || API_URL;
 
 type AuthResponse = { token: string; user: User };
 
