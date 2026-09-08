@@ -10,10 +10,25 @@ import type {
   User,
 } from "./types";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
-// Auth now lives on the unified Python backend; VITE_AUTH_URL remains only as
-// an override for split deployments.
-const AUTH_URL = import.meta.env.VITE_AUTH_URL || API_URL;
+const IS_LOCAL_HOST = /^(localhost|127\.)/.test(window.location.hostname);
+
+// Hosted builds must never call localhost — stale VITE_* env vars baked into a
+// deployment otherwise break the app. Same-origin is the hosted default (the
+// platform proxies /api/* to the backend, see vercel.json).
+function resolveBase(configured: string | undefined, fallback: string): string {
+  const value = configured?.trim().replace(/\/+$/, "");
+  if (!value) return fallback;
+  if (!IS_LOCAL_HOST && /localhost|127\.0\.0\.1/.test(value)) return fallback;
+  return value;
+}
+
+const API_URL = resolveBase(
+  import.meta.env.VITE_API_URL,
+  IS_LOCAL_HOST ? "http://localhost:8000" : window.location.origin,
+);
+// Auth lives on the unified Python backend; VITE_AUTH_URL remains only as an
+// override for split deployments.
+const AUTH_URL = resolveBase(import.meta.env.VITE_AUTH_URL, API_URL);
 
 type AuthResponse = { token: string; user: User };
 
