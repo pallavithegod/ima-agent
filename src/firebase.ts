@@ -1,20 +1,33 @@
-import { initializeApp } from "firebase/app";
+import { initializeApp, type FirebaseApp } from "firebase/app";
 import {
   GithubAuthProvider,
   getAuth,
   signInWithPopup,
 } from "firebase/auth";
 
-const firebaseApp = initializeApp({
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-});
+// Lazy initialization: a missing/invalid Firebase config must not crash the
+// whole dashboard at load — only the GitHub sign-in button depends on it.
+let firebaseApp: FirebaseApp | null = null;
 
-const auth = getAuth(firebaseApp);
+function getFirebaseApp(): FirebaseApp {
+  if (firebaseApp) return firebaseApp;
+  const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "GitHub sign-in is not configured (missing Firebase settings). Use email/password instead.",
+    );
+  }
+  firebaseApp = initializeApp({
+    apiKey,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  });
+  return firebaseApp;
+}
 
 export async function signInWithGithub() {
+  const auth = getAuth(getFirebaseApp());
   const provider = new GithubAuthProvider();
   provider.addScope("repo");
   provider.addScope("read:user");
